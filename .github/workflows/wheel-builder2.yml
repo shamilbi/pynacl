@@ -63,7 +63,7 @@ jobs:
 
       - run: mkdir pynacl-wheelhouse
       - run: move wheelhouse\PyNaCl*.whl pynacl-wheelhouse\
-      - uses: actions/upload-artifact@v1
+      - uses: actions/upload-artifact@v2.2.2
         with:
           name: "pynacl-${{ github.event.inputs.version }}-win-${{ matrix.WINDOWS.ARCH }}-${{ matrix.PYTHON.VERSION }}"
           path: pynacl-wheelhouse\
