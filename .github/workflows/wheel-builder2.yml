@@ -1,0 +1,81 @@
+name: Wheel Builder 2
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        required: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        WINDOWS:
+          - {ARCH: 'x86', SODIUM_ARCH: 'Win32', VS_ARCH: 'x86'}
+          - {ARCH: 'x64', SODIUM_ARCH: 'x64', VS_ARCH: 'amd64'}
+        PYTHON:
+          - {VERSION: "3.8", SODIUM_MSVC_VERSION: "v140", "USE_ABI3": "true", "ABI_VERSION": "cp35"}
+          - {VERSION: "3.9", SODIUM_MSVC_VERSION: "v140", "USE_ABI3": "true", "ABI_VERSION": "cp35"}
+    name: "${{ matrix.PYTHON.VERSION }} ${{ matrix.WINDOWS.ARCH }} ${{ matrix.PYTHON.ABI_VERSION }}"
+    steps:
+      - uses: actions/checkout@master
+      - name: Setup python
+        uses: actions/setup-python@v2.2.1
+        with:
+          python-version: ${{ matrix.PYTHON.VERSION }}
+          architecture: ${{ matrix.WINDOWS.ARCH }}
+      - name: Install MSVC for Python 2.7
+        run: |
+            Invoke-WebRequest -Uri https://download.microsoft.com/download/7/9/6/796EF2E4-801B-4FC4-AB28-B59FBF6D907B/VCForPython27.msi -OutFile VCForPython27.msi
+            Start-Process msiexec -Wait -ArgumentList @('/i', 'VCForPython27.msi', '/qn', 'ALLUSERS=1')
+            Remove-Item VCForPython27.msi -Force
+        shell: powershell
+        if: matrix.PYTHON.VERSION == '2.7'
+
+      - name: Extract libsodium libraries
+        run: |
+          Expand-Archive src/libsodium-1.0.18-msvc.zip -DestinationPath c:\
+        shell: powershell
+      - name: Add sodium to paths
+        run: |
+          echo "INCLUDE=C:/libsodium/include;$INCLUDE" >> $GITHUB_ENV
+          echo "LIB=C:/libsodium/${{ matrix.WINDOWS.SODIUM_ARCH }}/release/${{ matrix.PYTHON.SODIUM_MSVC_VERSION }}/static;$LIB" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Copy stdint.h to include dir (distant weeping)
+        run: mv .github/stdint-nonsense/stdint.h C:/libsodium/include/stdint.h
+        if: matrix.PYTHON.VERSION == '2.7'
+      - name: Install wheel and our Python dependencies
+        run: python -m pip install -U pip wheel cffi six
+      - name: Download the sdist
+        run: pip download pynacl==${{ github.event.inputs.version }} --no-deps --no-binary pynacl && tar zxvf PyNaCl* && mkdir wheelhouse
+        shell: bash
+      - name: Build the wheel (py2)
+        run: cd PyNaCl* && python setup.py bdist_wheel && mv dist/PyNaCl*.whl ../wheelhouse
+        env:
+          PYNACL_SODIUM_LIBRARY_NAME: sodium
+          PYNACL_SODIUM_STATIC: 1
+          SODIUM_INSTALL: system
+        if: matrix.PYTHON.VERSION == '2.7'
+      - name: Build the wheel (py3 abi3)
+        run: |
+          call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\Common7\Tools\VsDevCmd.bat" -no_logo -arch=${{ matrix.WINDOWS.VS_ARCH }}
+          cd PyNaCl* && python setup.py bdist_wheel  --py-limited-api=${{ matrix.PYTHON.ABI_VERSION }} && mv dist/PyNaCl*.whl ../wheelhouse
+        shell: cmd
+        env:
+          PYNACL_SODIUM_LIBRARY_NAME: sodium
+          PYNACL_SODIUM_STATIC: 1
+          SODIUM_INSTALL: system
+        if: matrix.PYTHON.VERSION != '2.7'
+
+      - name: Test installing the wheel
+        run: pip install -f wheelhouse pynacl --no-index
+      - name: Test the installed wheel
+        run: |
+          python -c "import nacl.signing; key = nacl.signing.SigningKey.generate();signature = key.sign(b'test'); key.verify_key.verify(signature)"
+      - run: mkdir pynacl-wheelhouse
+      - run: move wheelhouse\PyNaCl*.whl pynacl-wheelhouse\
+      - uses: actions/upload-artifact@v1
+        with:
+          name: "pynacl-${{ github.event.inputs.version }}-win-${{ matrix.WINDOWS.ARCH }}-${{ matrix.PYTHON.VERSION }}"
+          path: pynacl-wheelhouse\
